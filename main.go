@@ -21,7 +21,7 @@ func run() error {
 	fmt.Println("Creating tables...")
 	err = sqlitex.ExecScript(conn, `
 CREATE TABLE main.t(id INTEGER PRIMARY KEY, a,b,c);
-CREATE TABLE temp.t(id INTEGER PRIMARY KEY, a,b,c) --- remove this line to avoid issue;
+CREATE TABLE temp.t(id INTEGER PRIMARY KEY, a,b,c) --- remove this line or rename the table to avoid issue;
 `)
 	if err != nil {
 		return err
@@ -32,8 +32,15 @@ CREATE TABLE temp.t(id INTEGER PRIMARY KEY, a,b,c) --- remove this line to avoid
 		return err
 	}
 	defer sess.Delete()
-	fmt.Println("Attaching to t...")
-	if err := sess.Attach("t"); err != nil {
+	// An empty string will pass NULL to sqlite3session_attach and allow
+	// the bug.
+	var attach string
+	// Any of these prevent the bug.
+	//attach = "*"
+	//attach = "main.*"
+	//attach = "main.t"
+	fmt.Printf("Attaching to %s ...\n", attach)
+	if err := sess.Attach(attach); err != nil {
 		return err
 	}
 
@@ -41,6 +48,7 @@ CREATE TABLE temp.t(id INTEGER PRIMARY KEY, a,b,c) --- remove this line to avoid
 	commit := sqlitex.Save(conn)
 	err = sqlitex.ExecScript(conn, `
 INSERT INTO main.t(a,b,c) VALUES (1,2,3);
+INSERT INTO temp.t(a,b,c) VALUES (1,2,3) --- This line avoids the conflict, but the changeset doesn't apply to main.t like expected;
 `)
 	if err != nil {
 		return err
@@ -70,7 +78,8 @@ INSERT INTO main.t(a,b,c) VALUES (1,2,3);
 	}
 	fmt.Println("inverted changeset:", sql)
 
-	/* uncomment this to avoid issue
+	/*// Dropping the temp table avoids the issue...
+	fmt.Println("Dropping temp table...")
 		err = sqlitex.ExecScript(conn, `
 	DROP TABLE temp.t;
 	`)
@@ -94,13 +103,14 @@ INSERT INTO main.t(a,b,c) VALUES (1,2,3);
 	if err := conn.ChangesetApply(invrt, filterFn, conflictFn); err != nil {
 		return err
 	}
+	fmt.Println("done.")
 
 	sql, err = sqlitechangeset.SessionToSQL(conn, sess)
 	if err != nil {
 		return err
 	}
 	if len(sql) > 0 {
-		fmt.Println("Error: changeset not empty:", sql)
+		return fmt.Errorf("Error: current session changeset not empty: %v", sql)
 	}
 	fmt.Println("success")
 
